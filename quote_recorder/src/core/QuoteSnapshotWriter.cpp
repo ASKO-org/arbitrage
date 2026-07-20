@@ -3,16 +3,21 @@
 #include <iostream>
 
 #include "models/QuoteSnapshotRow.h"
+#include "models/QuoteUpdateStatRow.h"
 
 QuoteSnapshotWriter::QuoteSnapshotWriter(const QuoteStore& store, std::vector<TrackedSymbol> symbols,
                                           DatabaseRepository& repository,
                                           std::chrono::milliseconds quoteTtl,
-                                          std::chrono::milliseconds snapshotInterval)
+                                          std::chrono::milliseconds snapshotInterval,
+                                          std::string snapshotDir,
+                                          std::size_t snapshotFlushThreshold)
     : store_(store),
       symbols_(std::move(symbols)),
       repository_(repository),
       quoteTtl_(quoteTtl),
-      snapshotInterval_(snapshotInterval) {}
+      snapshotInterval_(snapshotInterval),
+      fileWriter_(std::move(snapshotDir), snapshotFlushThreshold),
+      lastUpdateRateReport_(std::chrono::steady_clock::now()) {}
 
 QuoteSnapshotWriter::~QuoteSnapshotWriter() { stop(); }
 
@@ -24,6 +29,7 @@ void QuoteSnapshotWriter::start() {
 void QuoteSnapshotWriter::stop() {
     if (!running_.exchange(false)) return;
     if (thread_.joinable()) thread_.join();
+    fileWriter_.flushAll();
 }
 
 void QuoteSnapshotWriter::run() {
@@ -31,6 +37,7 @@ void QuoteSnapshotWriter::run() {
         std::this_thread::sleep_for(snapshotInterval_);
         if (!running_) break;
         takeSnapshot();
+        reportUpdateRatesIfDue();
     }
 }
 
@@ -51,9 +58,30 @@ void QuoteSnapshotWriter::takeSnapshot() {
 
     if (rows.empty()) return;
 
+    fileWriter_.recordAll(rows);
+}
+
+void QuoteSnapshotWriter::reportUpdateRatesIfDue() {
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = now - lastUpdateRateReport_;
+    if (elapsed < kUpdateRateReportInterval) return;
+
+    const double elapsedSeconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
+    const auto counts = store_.snapshotAndResetCounts();
+    lastUpdateRateReport_ = now;
+    if (counts.empty()) return;
+
+    std::vector<QuoteUpdateStatRow> rows;
+    rows.reserve(counts.size());
+    for (const auto& count : counts) {
+        rows.push_back(QuoteUpdateStatRow{count.exchangeName, count.symbolCode,
+                                           count.count / elapsedSeconds});
+    }
+
     try {
-        repository_.insertQuoteSnapshots(rows);
+        repository_.upsertQuoteUpdateStats(rows);
     } catch (const std::exception& ex) {
-        std::cerr << "QuoteSnapshotWriter: failed to persist snapshot: " << ex.what() << "\n";
+        std::cerr << "QuoteSnapshotWriter: failed to persist update-rate stats: " << ex.what() << "\n";
     }
 }

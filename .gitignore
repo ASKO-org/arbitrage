@@ -3,3 +3,5 @@ build/
 *.a
 *.so
 .claude/settings.local.json
+.env
+data/

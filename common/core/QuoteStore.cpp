@@ -6,7 +6,24 @@ std::string QuoteStore::key(const std::string& exchangeName, const std::string& 
 
 void QuoteStore::update(const Quote& quote) {
     std::lock_guard<std::mutex> lock(mutex_);
-    quotes_[key(quote.exchangeName, quote.symbolCode)] = quote;
+    const std::string quoteKey = key(quote.exchangeName, quote.symbolCode);
+    quotes_[quoteKey] = quote;
+
+    auto& entry = updateCounts_[quoteKey];
+    entry.exchangeName = quote.exchangeName;
+    entry.symbolCode = quote.symbolCode;
+    ++entry.count;
+}
+
+std::vector<QuoteStore::UpdateCount> QuoteStore::snapshotAndResetCounts() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<UpdateCount> result;
+    result.reserve(updateCounts_.size());
+    for (auto& [quoteKey, entry] : updateCounts_) {
+        result.push_back(std::move(entry));
+    }
+    updateCounts_.clear();
+    return result;
 }
 
 std::optional<Quote> QuoteStore::latest(const std::string& exchangeName, const std::string& symbolCode,

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 #include <ixwebsocket/IXWebSocket.h>
 #include <nlohmann/json.hpp>
@@ -11,6 +12,18 @@
 
 namespace {
 constexpr const char* kBulletUrl = "https://api-futures.kucoin.com/api/v1/bullet-public";
+
+// Verified experimentally: sending one subscribe message per symbol with no
+// delay (fine at a few dozen symbols) causes KuCoin Futures to abnormally
+// close the connection once the watchlist grows into the hundreds (observed
+// at 650 symbols). This isn't the same failure shape as GATEIO_Fut's
+// silently-dropped oversized batch — here the connection itself gets torn
+// down, pointing at a message-rate limit rather than a message-size one.
+// Comma-joining topics like KucoinSpotMarketDataConnector does isn't used
+// here since (per the class comment) it's unconfirmed whether the futures
+// topic supports it — throttling the existing one-topic-per-symbol calls is
+// the safer fix that doesn't risk silently breaking the subscription format.
+constexpr std::chrono::milliseconds kSubscribeThrottle{200};
 
 std::string uniqueId() {
     return std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -89,15 +102,22 @@ void KucoinFutMarketDataConnector::stop() {
 }
 
 void KucoinFutMarketDataConnector::sendSubscribe() {
-    for (const auto& symbol : symbols_) {
-        const auto it = symbol.nativeSymbols.find(exchangeName());
-        if (it == symbol.nativeSymbols.end()) continue;
-        webSocket_->send(nlohmann::json{{"id", uniqueId()},
-                                         {"type", "subscribe"},
-                                         {"topic", "/contractMarket/tickerV2:" + it->second},
-                                         {"response", true}}
-                              .dump());
-    }
+    // Runs on a detached thread, not inline on the WebSocket's own I/O
+    // callback thread — otherwise sleeping between sends here would also
+    // block this connector from processing incoming messages (pings, acks)
+    // for the whole throttled burst.
+    std::thread([this] {
+        for (const auto& symbol : symbols_) {
+            const auto it = symbol.nativeSymbols.find(exchangeName());
+            if (it == symbol.nativeSymbols.end()) continue;
+            webSocket_->send(nlohmann::json{{"id", uniqueId()},
+                                             {"type", "subscribe"},
+                                             {"topic", "/contractMarket/tickerV2:" + it->second},
+                                             {"response", true}}
+                                  .dump());
+            std::this_thread::sleep_for(kSubscribeThrottle);
+        }
+    }).detach();
 }
 
 void KucoinFutMarketDataConnector::handleMessage(const std::string& payload) {

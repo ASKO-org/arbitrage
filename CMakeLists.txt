@@ -45,17 +45,37 @@ add_library(common STATIC
     common/network/HttpClient.cpp
     common/marketdata/HeartbeatTimer.cpp
     common/marketdata/Gzip.cpp
+    common/marketdata/MexcProto.cpp
     common/marketdata/BinanceMarketDataConnector.cpp
+    common/marketdata/BinanceFutMarketDataConnector.cpp
     common/marketdata/BybitMarketDataConnector.cpp
+    common/marketdata/BybitFutMarketDataConnector.cpp
     common/marketdata/KucoinSpotMarketDataConnector.cpp
     common/marketdata/KucoinFutMarketDataConnector.cpp
     common/marketdata/BitgetSpotMarketDataConnector.cpp
     common/marketdata/BitgetFutMarketDataConnector.cpp
     common/marketdata/HtxSpotMarketDataConnector.cpp
     common/marketdata/HtxFutMarketDataConnector.cpp
+    common/marketdata/OkxSpotMarketDataConnector.cpp
+    common/marketdata/OkxFutMarketDataConnector.cpp
+    common/marketdata/MexcSpotMarketDataConnector.cpp
+    common/marketdata/MexcFutMarketDataConnector.cpp
+    common/marketdata/KrakenSpotMarketDataConnector.cpp
+    common/marketdata/KrakenFutMarketDataConnector.cpp
+    common/marketdata/CoinexSpotMarketDataConnector.cpp
+    common/marketdata/CoinexFutMarketDataConnector.cpp
+    common/marketdata/GateioSpotMarketDataConnector.cpp
+    common/marketdata/GateioFutMarketDataConnector.cpp
+    common/marketdata/BingxSpotMarketDataConnector.cpp
+    common/marketdata/BingxFutMarketDataConnector.cpp
     common/core/QuoteStore.cpp
+    common/core/QuoteSnapshotFileReader.cpp
+    common/execution/HmacSigner.cpp
+    common/execution/OrderSubmitter.cpp
+    common/execution/BinanceExecutionConnector.cpp
+    common/execution/BybitExecutionConnector.cpp
 )
-target_include_directories(common PUBLIC common)
+target_include_directories(common PUBLIC common ${HIREDIS_INCLUDE_DIRS})
 target_link_libraries(common PUBLIC
     libpqxx::pqxx
     ixwebsocket
@@ -63,6 +83,7 @@ target_link_libraries(common PUBLIC
     OpenSSL::Crypto
     CURL::libcurl
     ZLIB::ZLIB
+    ${HIREDIS_LIBRARIES}
 )
 
 # instrument_loader — разовая загрузка списков инструментов в Postgres.
@@ -104,21 +125,64 @@ add_executable(arbitrage_scanner
     arbitrage_scanner/src/core/ArbitrageDetector.cpp
     arbitrage_scanner/src/core/RedisOpportunitySink.cpp
 )
-target_include_directories(arbitrage_scanner PRIVATE arbitrage_scanner/src ${HIREDIS_INCLUDE_DIRS})
+target_include_directories(arbitrage_scanner PRIVATE arbitrage_scanner/src)
 target_link_libraries(arbitrage_scanner PRIVATE
     common
     nlohmann_json::nlohmann_json
-    ${HIREDIS_LIBRARIES}
 )
 
 # quote_recorder — долгоживущий сервис, периодически сохраняет best bid/ask
-# для инструментов из recorder_watchlist в Postgres.
+# для инструментов из recorder_watchlist в бинарные файлы (по одному на
+# биржу и день).
 add_executable(quote_recorder
     quote_recorder/src/main.cpp
     quote_recorder/src/core/QuoteSnapshotWriter.cpp
+    quote_recorder/src/core/QuoteSnapshotFileWriter.cpp
 )
 target_include_directories(quote_recorder PRIVATE quote_recorder/src)
 target_link_libraries(quote_recorder PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# execution_service — долгоживущий сервис, читает Order-запросы из
+# execution:orders (Redis Stream, consumer group), размещает их на бирже и
+# публикует исход в execution:reports.
+add_executable(execution_service
+    execution_service/src/main.cpp
+    execution_service/src/core/OrderIntake.cpp
+    execution_service/src/core/OrderRouter.cpp
+    execution_service/src/core/ReportPublisher.cpp
+)
+target_include_directories(execution_service PRIVATE execution_service/src)
+target_link_libraries(execution_service PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# execution_cli — командная утилита: собирает Order из аргументов и
+# отправляет его в execution:orders через OrderSubmitter, не дожидаясь
+# интеграции со стратегиями.
+add_executable(execution_cli
+    execution_cli/src/main.cpp
+)
+target_include_directories(execution_cli PRIVATE execution_service/src)
+target_link_libraries(execution_cli PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# spread_builder — офлайн-утилита: реплеит записанные бинарные снапшоты
+# котировок для пары бирж и строит два ряда сырого (без комиссий и
+# проскальзывания) спреда с фиксированным интервалом — entry (вход:
+# купить на exchange1, продать на exchange2) и exit (выход: обратная
+# сделка) — в JSON-файл для последующей визуализации.
+add_executable(spread_builder
+    spread_builder/src/main.cpp
+    spread_builder/src/core/SpreadSeriesBuilder.cpp
+)
+target_include_directories(spread_builder PRIVATE spread_builder/src)
+target_link_libraries(spread_builder PRIVATE
     common
     nlohmann_json::nlohmann_json
 )

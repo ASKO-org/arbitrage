@@ -14,15 +14,29 @@
 #include "core/QuoteStore.h"
 #include "core/RedisOpportunitySink.h"
 #include "database/DatabaseRepository.h"
+#include "marketdata/BinanceFutMarketDataConnector.h"
 #include "marketdata/BinanceMarketDataConnector.h"
+#include "marketdata/BingxFutMarketDataConnector.h"
+#include "marketdata/BingxSpotMarketDataConnector.h"
 #include "marketdata/BitgetFutMarketDataConnector.h"
 #include "marketdata/BitgetSpotMarketDataConnector.h"
+#include "marketdata/BybitFutMarketDataConnector.h"
 #include "marketdata/BybitMarketDataConnector.h"
+#include "marketdata/CoinexFutMarketDataConnector.h"
+#include "marketdata/CoinexSpotMarketDataConnector.h"
+#include "marketdata/GateioFutMarketDataConnector.h"
+#include "marketdata/GateioSpotMarketDataConnector.h"
 #include "marketdata/HtxFutMarketDataConnector.h"
 #include "marketdata/HtxSpotMarketDataConnector.h"
 #include "marketdata/IMarketDataConnector.h"
+#include "marketdata/KrakenFutMarketDataConnector.h"
+#include "marketdata/KrakenSpotMarketDataConnector.h"
 #include "marketdata/KucoinFutMarketDataConnector.h"
 #include "marketdata/KucoinSpotMarketDataConnector.h"
+#include "marketdata/MexcFutMarketDataConnector.h"
+#include "marketdata/MexcSpotMarketDataConnector.h"
+#include "marketdata/OkxFutMarketDataConnector.h"
+#include "marketdata/OkxSpotMarketDataConnector.h"
 
 namespace {
 std::atomic<bool> shutdownRequested{false};
@@ -45,6 +59,20 @@ int main() {
         connectors.push_back(std::make_unique<BitgetFutMarketDataConnector>());
         connectors.push_back(std::make_unique<HtxSpotMarketDataConnector>());
         connectors.push_back(std::make_unique<HtxFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<OkxSpotMarketDataConnector>());
+        connectors.push_back(std::make_unique<OkxFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<BinanceFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<BybitFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<KrakenSpotMarketDataConnector>());
+        connectors.push_back(std::make_unique<KrakenFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<CoinexSpotMarketDataConnector>());
+        connectors.push_back(std::make_unique<CoinexFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<GateioSpotMarketDataConnector>());
+        connectors.push_back(std::make_unique<GateioFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<MexcSpotMarketDataConnector>());
+        connectors.push_back(std::make_unique<MexcFutMarketDataConnector>());
+        connectors.push_back(std::make_unique<BingxSpotMarketDataConnector>());
+        connectors.push_back(std::make_unique<BingxFutMarketDataConnector>());
 
         std::vector<std::string> venues;
         for (const auto& connector : connectors) venues.push_back(connector->exchangeName());

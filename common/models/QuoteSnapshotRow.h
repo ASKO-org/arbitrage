@@ -2,8 +2,9 @@
 #include <chrono>
 #include <string>
 
-// One recorded best-bid/ask observation for a symbol on a venue, destined
-// for the "quote_snapshot" table.
+// One recorded best-bid/ask observation for a symbol on a venue, read from
+// QuoteStore and appended to a per-exchange, per-day binary snapshot file
+// by QuoteSnapshotFileWriter.
 struct QuoteSnapshotRow {
     std::string exchangeName;
     std::string symbolCode;
