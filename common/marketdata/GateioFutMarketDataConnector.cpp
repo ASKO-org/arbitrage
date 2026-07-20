@@ -126,7 +126,9 @@ void GateioFutMarketDataConnector::handleMessage(const std::string& payload) {
         quote.bidQty = parseDoubleOr(result.at("B"), 0.0);
         quote.askPrice = parseDoubleOr(result.at("a"), 0.0);
         quote.askQty = parseDoubleOr(result.at("A"), 0.0);
-        quote.exchangeTimestamp = std::chrono::system_clock::now();
+        // "t" is Gate.io's own push timestamp (ms since epoch) on the
+        // result object; falls back to local receipt time if ever absent.
+        quote.exchangeTimestamp = exchangeTimestampOrNow(result.value("t", int64_t{0}));
         quote.receivedAt = std::chrono::steady_clock::now();
         onQuote_(quote);
     } catch (const std::exception&) {

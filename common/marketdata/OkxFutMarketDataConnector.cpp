@@ -106,7 +106,9 @@ void OkxFutMarketDataConnector::handleMessage(const std::string& payload) {
         quote.bidQty = parseDoubleOr(bid.at(0).at(1), 0.0);
         quote.askPrice = parseDoubleOr(ask.at(0).at(0), 0.0);
         quote.askQty = parseDoubleOr(ask.at(0).at(1), 0.0);
-        quote.exchangeTimestamp = std::chrono::system_clock::now();
+        // "ts" is OKX's own push timestamp (string, ms since epoch) on each
+        // tick; falls back to local receipt time if it's ever absent.
+        quote.exchangeTimestamp = exchangeTimestampOrNow(std::stoll(tick.value("ts", "0")));
         quote.receivedAt = std::chrono::steady_clock::now();
         onQuote_(quote);
     } catch (const std::exception&) {

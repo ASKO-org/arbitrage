@@ -82,7 +82,9 @@ void BinanceFutMarketDataConnector::handleMessage(const std::string& payload) {
         quote.bidQty = std::stod(data.at("B").get<std::string>());
         quote.askPrice = std::stod(data.at("a").get<std::string>());
         quote.askQty = std::stod(data.at("A").get<std::string>());
-        quote.exchangeTimestamp = std::chrono::system_clock::now();
+        // "E" is Binance's own event-time (ms since epoch) on this stream;
+        // falls back to local receipt time if it's ever absent.
+        quote.exchangeTimestamp = exchangeTimestampOrNow(data.value("E", int64_t{0}));
         quote.receivedAt = std::chrono::steady_clock::now();
         onQuote_(quote);
     } catch (const std::exception&) {

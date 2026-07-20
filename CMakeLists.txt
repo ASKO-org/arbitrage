@@ -70,6 +70,8 @@ add_library(common STATIC
     common/marketdata/BingxFutMarketDataConnector.cpp
     common/core/QuoteStore.cpp
     common/core/QuoteSnapshotFileReader.cpp
+    common/marketdata/QuoteFeedPublisher.cpp
+    common/marketdata/QuoteFeedSubscriber.cpp
     common/execution/HmacSigner.cpp
     common/execution/OrderSubmitter.cpp
     common/execution/BinanceExecutionConnector.cpp
@@ -131,9 +133,21 @@ target_link_libraries(arbitrage_scanner PRIVATE
     nlohmann_json::nlohmann_json
 )
 
-# quote_recorder — долгоживущий сервис, периодически сохраняет best bid/ask
-# для инструментов из recorder_watchlist в бинарные файлы (по одному на
-# биржу и день).
+# market_data_feed — долгоживущий сервис, единственный держатель всех
+# WebSocket-коннекторов рыночных данных; публикует каждую котировку в Redis
+# (pub/sub) для quote_recorder и любых будущих подписчиков.
+add_executable(market_data_feed
+    market_data_feed/src/main.cpp
+)
+target_include_directories(market_data_feed PRIVATE market_data_feed/src)
+target_link_libraries(market_data_feed PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# quote_recorder — долгоживущий сервис, подписывается на котировки из Redis
+# (market_data_feed) и периодически сохраняет best bid/ask для инструментов
+# из recorder_watchlist в бинарные файлы (по одному на биржу и день).
 add_executable(quote_recorder
     quote_recorder/src/main.cpp
     quote_recorder/src/core/QuoteSnapshotWriter.cpp

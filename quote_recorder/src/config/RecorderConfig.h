@@ -29,4 +29,13 @@ inline std::size_t snapshotFlushThreshold() {
         std::stoul(Config::envOr("RECORDER_SNAPSHOT_FLUSH_THRESHOLD", "500")));
 }
 
+// Redis connection quote_recorder reads quotes from — market_data_feed is
+// the only writer to this channel. Same env vars/defaults as
+// MarketDataFeedConfig so both services agree without extra configuration.
+inline std::string redisHost() { return Config::envOr("REDIS_HOST", "localhost"); }
+inline int redisPort() { return std::stoi(Config::envOr("REDIS_PORT", "6379")); }
+inline std::string quoteChannel() {
+    return Config::envOr("MARKET_DATA_QUOTE_CHANNEL", "market_data:quotes");
+}
+
 }  // namespace RecorderConfig

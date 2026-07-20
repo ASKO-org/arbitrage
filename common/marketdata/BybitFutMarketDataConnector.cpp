@@ -102,7 +102,9 @@ void BybitFutMarketDataConnector::handleMessage(const std::string& payload) {
         quote.bidQty = std::stod(bids.at(0).at(1).get<std::string>());
         quote.askPrice = std::stod(asks.at(0).at(0).get<std::string>());
         quote.askQty = std::stod(asks.at(0).at(1).get<std::string>());
-        quote.exchangeTimestamp = std::chrono::system_clock::now();
+        // "ts" is Bybit's own push timestamp (ms since epoch) on the message
+        // envelope; falls back to local receipt time if it's ever absent.
+        quote.exchangeTimestamp = exchangeTimestampOrNow(json.value("ts", int64_t{0}));
         quote.receivedAt = std::chrono::steady_clock::now();
         onQuote_(quote);
     } catch (const std::exception&) {
