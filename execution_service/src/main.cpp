@@ -16,6 +16,7 @@
 #include "execution/BybitExecutionConnector.h"
 #include "execution/IExecutionConnector.h"
 #include "models/Fill.h"
+#include "security/SecretsStore.h"
 
 namespace {
 std::atomic<bool> shutdownRequested{false};
@@ -78,12 +79,14 @@ int main() {
         DatabaseRepository repository(Config::postgresConnectionString());
         repository.ensureSchema();
 
+        SecretsStore secrets(ExecutionConfig::secretsMasterKeyPath(), ExecutionConfig::secretsFilePath());
+
         std::vector<std::unique_ptr<IExecutionConnector>> connectors;
         connectors.push_back(std::make_unique<BinanceExecutionConnector>(
-            ExecutionConfig::binanceApiKey(), ExecutionConfig::binanceApiSecret(),
+            secrets.get("binance_api_key"), secrets.get("binance_api_secret"),
             ExecutionConfig::binanceBaseUrl()));
         connectors.push_back(std::make_unique<BybitExecutionConnector>(
-            ExecutionConfig::bybitApiKey(), ExecutionConfig::bybitApiSecret(), ExecutionConfig::bybitBaseUrl()));
+            secrets.get("bybit_api_key"), secrets.get("bybit_api_secret"), ExecutionConfig::bybitBaseUrl()));
 
         reconcile(repository, connectors);
 

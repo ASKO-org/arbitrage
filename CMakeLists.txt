@@ -76,6 +76,7 @@ add_library(common STATIC
     common/execution/OrderSubmitter.cpp
     common/execution/BinanceExecutionConnector.cpp
     common/execution/BybitExecutionConnector.cpp
+    common/security/SecretsStore.cpp
 )
 target_include_directories(common PUBLIC common ${HIREDIS_INCLUDE_DIRS})
 target_link_libraries(common PUBLIC
@@ -182,6 +183,18 @@ add_executable(execution_cli
 )
 target_include_directories(execution_cli PRIVATE execution_service/src)
 target_link_libraries(execution_cli PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# secrets_cli — командная утилита: инициализирует мастер-ключ и
+# зашифровывает/обновляет ключи бирж (AES-256-GCM) в secrets/exchange_keys.enc.json,
+# не принимая секреты как аргументы командной строки (значение запрашивается
+# интерактивно, без эха на терминал).
+add_executable(secrets_cli
+    secrets_cli/src/main.cpp
+)
+target_link_libraries(secrets_cli PRIVATE
     common
     nlohmann_json::nlohmann_json
 )

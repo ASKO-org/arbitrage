@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 #include <string>
 
 #include "config/Config.h"
@@ -27,14 +28,23 @@ inline double maxAbsPosition() {
 
 // Defaults to each venue's testnet so a service started without credentials
 // configured can't accidentally reach the live account.
-inline std::string binanceApiKey() { return Config::envOr("BINANCE_API_KEY", ""); }
-inline std::string binanceApiSecret() { return Config::envOr("BINANCE_API_SECRET", ""); }
 inline std::string binanceBaseUrl() {
     return Config::envOr("BINANCE_BASE_URL", "https://testnet.binance.vision");
 }
-
-inline std::string bybitApiKey() { return Config::envOr("BYBIT_API_KEY", ""); }
-inline std::string bybitApiSecret() { return Config::envOr("BYBIT_API_SECRET", ""); }
 inline std::string bybitBaseUrl() { return Config::envOr("BYBIT_BASE_URL", "https://api-testnet.bybit.com"); }
+
+// The actual API keys/secrets are no longer read from plain env vars — see
+// SecretsStore (common/security/SecretsStore.h). These two paths are not
+// secrets themselves, just where to find the (encrypted) secret and the
+// (separate, outside-the-repo) master key that decrypts it.
+inline std::string secretsMasterKeyPath() {
+    const char* home = std::getenv("HOME");
+    const std::string defaultPath = (home ? std::string(home) : std::string(".")) +
+                                     "/.secrets/instrument_loader.key";
+    return Config::envOr("SECRETS_MASTER_KEY_PATH", defaultPath);
+}
+inline std::string secretsFilePath() {
+    return Config::envOr("SECRETS_FILE_PATH", "secrets/exchange_keys.enc.json");
+}
 
 }  // namespace ExecutionConfig
