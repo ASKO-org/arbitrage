@@ -200,15 +200,20 @@ int main() {
         // across venues, then a crash) is exactly what took this process
         // down twice. Independent connections mean one venue's Redis
         // hiccup can no longer stall the other 11.
+        // Each connector also publishes to its own per-venue channel (see
+        // quoteChannelForVenue in Quote.h) rather than one shared channel —
+        // lets quote_recorder parallelize consumption one thread per venue
+        // instead of being bottlenecked on a single thread for the combined
+        // rate across all 12.
         std::vector<std::unique_ptr<QuoteFeedPublisher>> publishers;
         publishers.reserve(connectors.size());
         for (size_t i = 0; i < connectors.size(); ++i) {
             publishers.push_back(std::make_unique<QuoteFeedPublisher>(
                 MarketDataFeedConfig::redisHost(), MarketDataFeedConfig::redisPort(),
-                MarketDataFeedConfig::quoteChannel()));
+                quoteChannelForVenue(MarketDataFeedConfig::quoteChannel(), connectors[i]->exchangeName())));
         }
-        std::cout << "Publishing quotes to Redis channel '" << MarketDataFeedConfig::quoteChannel()
-                   << "' (" << publishers.size() << " independent connections)\n";
+        std::cout << "Publishing quotes to " << publishers.size()
+                   << " per-venue Redis channels (base '" << MarketDataFeedConfig::quoteChannel() << "')\n";
 
         // Separate connection from the publisher, used only by the report
         // loop below (single-threaded, so no locking needed) — kept

@@ -4,6 +4,18 @@
 
 #include <nlohmann/json.hpp>
 
+// Redis channel name for one venue's slice of the quote feed. Publisher
+// (market_data_feed) and subscriber (quote_recorder) sides both call this
+// with the same base channel so they agree on names by construction rather
+// than by convention. Per-venue channels (instead of one shared channel)
+// let quote_recorder run one subscriber thread per venue — each handling
+// only that venue's share of the combined quote rate (~13,000/sec across
+// all venues combined is far more than one thread doing JSON-parse-then-
+// store-update can sustain; ~1,000/sec per venue comfortably is).
+inline std::string quoteChannelForVenue(const std::string& baseChannel, const std::string& venue) {
+    return baseChannel + ":" + venue;
+}
+
 // Best bid/ask snapshot for one symbol on one exchange.
 struct Quote {
     std::string exchangeName;

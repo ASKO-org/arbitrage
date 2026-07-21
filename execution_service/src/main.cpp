@@ -81,12 +81,26 @@ int main() {
 
         SecretsStore secrets(ExecutionConfig::secretsMasterKeyPath(), ExecutionConfig::secretsFilePath());
 
+        // Only wire up venues whose credentials are actually configured —
+        // lets this run with e.g. Bybit-only while Binance keys aren't set
+        // up yet, rather than requiring every known venue up front.
         std::vector<std::unique_ptr<IExecutionConnector>> connectors;
-        connectors.push_back(std::make_unique<BinanceExecutionConnector>(
-            secrets.get("binance_api_key"), secrets.get("binance_api_secret"),
-            ExecutionConfig::binanceBaseUrl()));
-        connectors.push_back(std::make_unique<BybitExecutionConnector>(
-            secrets.get("bybit_api_key"), secrets.get("bybit_api_secret"), ExecutionConfig::bybitBaseUrl()));
+        if (secrets.has("binance_api_key") && secrets.has("binance_api_secret")) {
+            connectors.push_back(std::make_unique<BinanceExecutionConnector>(
+                secrets.get("binance_api_key"), secrets.get("binance_api_secret"),
+                ExecutionConfig::binanceBaseUrl()));
+        } else {
+            std::cout << "Binance credentials not configured — skipping Binance connector\n";
+        }
+        if (secrets.has("bybit_api_key") && secrets.has("bybit_api_secret")) {
+            connectors.push_back(std::make_unique<BybitExecutionConnector>(
+                secrets.get("bybit_api_key"), secrets.get("bybit_api_secret"), ExecutionConfig::bybitBaseUrl()));
+        } else {
+            std::cout << "Bybit credentials not configured — skipping Bybit connector\n";
+        }
+        if (connectors.empty()) {
+            throw std::runtime_error("No exchange credentials configured at all — nothing to do");
+        }
 
         reconcile(repository, connectors);
 

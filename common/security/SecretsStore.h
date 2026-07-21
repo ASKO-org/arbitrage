@@ -31,6 +31,8 @@ public:
     // blob.
     const std::string& get(const std::string& field) const;
 
+    bool has(const std::string& field) const { return fields_.count(field) > 0; }
+
     // --- Writer-side helpers, used by secrets_cli ---
 
     // Generates 32 random bytes (AES-256 key) and writes them base64-encoded
