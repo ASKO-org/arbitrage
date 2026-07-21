@@ -1,8 +1,10 @@
 #include "marketdata/QuoteFeedSubscriber.h"
 
 #include <cerrno>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 #include <hiredis/hiredis.h>
 #include <nlohmann/json.hpp>
@@ -12,13 +14,20 @@ void QuoteFeedSubscriber::RedisContextDeleter::operator()(redisContext* context)
 }
 
 QuoteFeedSubscriber::QuoteFeedSubscriber(const std::string& host, int port, std::string channel)
-    : channel_(std::move(channel)), context_(redisConnect(host.c_str(), port)) {
+    : host_(host), port_(port), channel_(std::move(channel)) {
+    connect();
+}
+
+QuoteFeedSubscriber::~QuoteFeedSubscriber() = default;
+
+void QuoteFeedSubscriber::connect() {
+    context_.reset(redisConnect(host_.c_str(), port_));
     if (!context_) {
         throw std::runtime_error("QuoteFeedSubscriber: redisConnect returned null (out of memory?)");
     }
     if (context_->err) {
-        throw std::runtime_error("QuoteFeedSubscriber: failed to connect to Redis at " + host + ":" +
-                                  std::to_string(port) + ": " + context_->errstr);
+        throw std::runtime_error("QuoteFeedSubscriber: failed to connect to Redis at " + host_ + ":" +
+                                  std::to_string(port_) + ": " + context_->errstr);
     }
 
     // A short receive timeout lets run()'s loop wake up periodically to
@@ -35,8 +44,6 @@ QuoteFeedSubscriber::QuoteFeedSubscriber(const std::string& host, int port, std:
     freeReplyObject(reply);
 }
 
-QuoteFeedSubscriber::~QuoteFeedSubscriber() = default;
-
 void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
                                const std::function<bool()>& shouldStop) {
     while (!shouldStop()) {
@@ -45,8 +52,27 @@ void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
             if (context_->err == REDIS_ERR_IO && errno == EAGAIN) {
                 continue;  // receive timed out with nothing new; recheck shouldStop()
             }
-            throw std::runtime_error("QuoteFeedSubscriber: redisGetReply failed: " +
-                                      std::string(context_->errstr));
+
+            // Anything else means this connection is unusable — e.g. Redis
+            // closed it (a pub/sub client that falls behind gets
+            // disconnected once it exceeds Redis's client-output-buffer
+            // limit) or a transient network drop. Reconnect and
+            // re-subscribe instead of either busy-spinning on a dead socket
+            // or tearing down the whole process over something recoverable.
+            std::cerr << "[QuoteFeedSubscriber] connection lost (" << context_->errstr
+                       << ") -- reconnecting\n";
+            while (!shouldStop()) {
+                try {
+                    connect();
+                    std::cerr << "[QuoteFeedSubscriber] reconnected\n";
+                    break;
+                } catch (const std::exception& ex) {
+                    std::cerr << "[QuoteFeedSubscriber] reconnect failed: " << ex.what()
+                               << " -- retrying in 1s\n";
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+            }
+            continue;
         }
 
         auto* reply = static_cast<redisReply*>(replyVoid);

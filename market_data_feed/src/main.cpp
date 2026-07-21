@@ -12,6 +12,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <hiredis/hiredis.h>
+
 #include "config/Config.h"
 #include "config/MarketDataFeedConfig.h"
 #include "database/DatabaseRepository.h"
@@ -98,6 +100,34 @@ struct LatencyAccumulator {
     }
 };
 
+// Writes one venue's latest stats to a Redis hash `market_data:stats:<venue>`
+// so any process (recorder_viewer, redis-cli, a health check) can see live
+// per-exchange throughput/latency without tailing this process's log — and,
+// crucially, so a wedged or dead market_data_feed is visible as *stale*
+// data rather than invisible. The key TTL is set to a few report intervals:
+// if this process stops updating it, the key simply expires and disappears,
+// which is itself the "this venue/feed is no longer reporting" signal.
+void publishVenueStats(redisContext* ctx, const std::string& venue, long quotesTotal,
+                        const LatencyAccumulator::Snapshot& latency, bool nativeTimestamp,
+                        std::chrono::seconds ttl) {
+    if (!ctx) return;
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    const std::string key = "market_data:stats:" + venue;
+    auto* hsetReply = static_cast<redisReply*>(redisCommand(
+        ctx,
+        "HSET %s quotes_total %ld quotes_interval %ld latency_avg_ms %f latency_min_ms %lld "
+        "latency_max_ms %lld native_timestamp %d updated_at_ms %lld",
+        key.c_str(), quotesTotal, latency.count, latency.avgMs, static_cast<long long>(latency.minMs),
+        static_cast<long long>(latency.maxMs), nativeTimestamp ? 1 : 0, static_cast<long long>(nowMs)));
+    if (hsetReply) freeReplyObject(hsetReply);
+
+    auto* expireReply = static_cast<redisReply*>(
+        redisCommand(ctx, "EXPIRE %s %lld", key.c_str(), static_cast<long long>(ttl.count())));
+    if (expireReply) freeReplyObject(expireReply);
+}
+
 }  // namespace
 
 int main() {
@@ -159,25 +189,54 @@ int main() {
         for (const auto& connector : connectors) std::cout << " " << connector->exchangeName();
         std::cout << "\n";
 
-        QuoteFeedPublisher publisher(MarketDataFeedConfig::redisHost(), MarketDataFeedConfig::redisPort(),
-                                      MarketDataFeedConfig::quoteChannel());
+        // One publisher (own Redis connection) per connector, not one shared
+        // connection behind a mutex. A shared connection meant every
+        // connector's I/O thread serialized through a single lock for every
+        // quote — if Redis was ever briefly slow to respond (e.g. busy
+        // freeing a disconnected slow subscriber's output buffer), *all* 12
+        // threads stalled together waiting on that lock, which stalled their
+        // WebSocket read loops, which triggered exchange-side keepalive
+        // timeouts and a disconnect storm. That pattern (climbing latency
+        // across venues, then a crash) is exactly what took this process
+        // down twice. Independent connections mean one venue's Redis
+        // hiccup can no longer stall the other 11.
+        std::vector<std::unique_ptr<QuoteFeedPublisher>> publishers;
+        publishers.reserve(connectors.size());
+        for (size_t i = 0; i < connectors.size(); ++i) {
+            publishers.push_back(std::make_unique<QuoteFeedPublisher>(
+                MarketDataFeedConfig::redisHost(), MarketDataFeedConfig::redisPort(),
+                MarketDataFeedConfig::quoteChannel()));
+        }
         std::cout << "Publishing quotes to Redis channel '" << MarketDataFeedConfig::quoteChannel()
-                   << "'\n";
+                   << "' (" << publishers.size() << " independent connections)\n";
+
+        // Separate connection from the publisher, used only by the report
+        // loop below (single-threaded, so no locking needed) — kept
+        // independent of the per-quote publish path so a stats hiccup can
+        // never contend with or block the hot path.
+        std::unique_ptr<redisContext, void (*)(redisContext*)> statsContext(
+            redisConnect(MarketDataFeedConfig::redisHost().c_str(), MarketDataFeedConfig::redisPort()),
+            [](redisContext* c) {
+                if (c) redisFree(c);
+            });
+        if (!statsContext || statsContext->err) {
+            std::cerr << "Stats Redis connection failed; per-exchange stats keys won't be published\n";
+            statsContext.reset();
+        }
 
         std::vector<std::atomic<long>> quoteCounts(connectors.size());
         std::vector<LatencyAccumulator> latencies(connectors.size());
-        std::mutex publishMutex;  // redisContext isn't safe for concurrent use across connector IO threads
 
         for (size_t i = 0; i < connectors.size(); ++i) {
             connectors[i]->subscribe(symbols);
-            connectors[i]->setOnQuote([&publisher, &quoteCounts, &latencies, &publishMutex, i](const Quote& quote) {
+            QuoteFeedPublisher* publisher = publishers[i].get();
+            connectors[i]->setOnQuote([publisher, &quoteCounts, &latencies, i](const Quote& quote) {
                 const auto latencyMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::system_clock::now() - quote.exchangeTimestamp)
                                            .count();
                 latencies[i].record(latencyMs);
                 ++quoteCounts[i];
-                std::lock_guard<std::mutex> lock(publishMutex);
-                publisher.publish(quote);
+                publisher->publish(quote);
             });
         }
 
@@ -199,6 +258,8 @@ int main() {
                                    << (nativeTs ? " (exchange->us)" : " (receipt-stamped, not wire latency)");
                     }
                     std::cerr << "\n";
+                    publishVenueStats(statsContext.get(), venue, quoteCounts[i].load(), latency, nativeTs,
+                                       reportInterval * 3);
                 }
                 lastReport = std::chrono::steady_clock::now();
             }

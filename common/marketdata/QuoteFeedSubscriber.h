@@ -29,6 +29,12 @@ private:
         void operator()(redisContext* context) const;
     };
 
+    // (Re)connects and re-issues SUBSCRIBE. Throws std::runtime_error if the
+    // connection fails.
+    void connect();
+
+    std::string host_;
+    int port_;
     std::string channel_;
     std::unique_ptr<redisContext, RedisContextDeleter> context_;
 };
