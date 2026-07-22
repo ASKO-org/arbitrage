@@ -33,6 +33,10 @@ private:
     // connection fails.
     void connect();
 
+    // Retries connect() once per second until it succeeds or shouldStop()
+    // returns true.
+    void reconnectWithRetry(const std::function<bool()>& shouldStop);
+
     std::string host_;
     int port_;
     std::string channel_;
