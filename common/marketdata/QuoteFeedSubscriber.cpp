@@ -57,6 +57,16 @@ void QuoteFeedSubscriber::reconnectWithRetry(const std::function<bool()>& should
         try {
             connect();
             std::cerr << "[QuoteFeedSubscriber] reconnected on '" << channel_ << "'\n";
+            // Cooldown even on success. Without this, a *successful* reconnect
+            // went straight back into the read loop with zero delay — if the
+            // same staleness condition recurs immediately (e.g. an upstream
+            // publisher persistently running behind, not a one-off drop),
+            // that's an unbounded reconnect loop with no brake anywhere in
+            // it. Measured: 45,832 reconnects in ~60s (843% CPU) before this
+            // fix. A 1s floor caps every subscriber at ~1 reconnect/sec no
+            // matter what's triggering it, turning a resource-exhausting
+            // storm into a slow, visible, still-diagnosable symptom.
+            std::this_thread::sleep_for(std::chrono::seconds(1));
             return;
         } catch (const std::exception& ex) {
             std::cerr << "[QuoteFeedSubscriber] reconnect failed: " << ex.what() << " -- retrying in 1s\n";
