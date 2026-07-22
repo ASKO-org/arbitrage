@@ -47,4 +47,11 @@ inline std::string secretsFilePath() {
     return Config::envOr("SECRETS_FILE_PATH", "secrets/exchange_keys.enc.json");
 }
 
+// How long a credential can go unrotated before execution_service warns
+// loudly about it at startup. Doesn't block startup — a missed rotation
+// reminder is a much smaller problem than an unplanned trading outage.
+inline int secretsMaxAgeDays() {
+    return std::stoi(Config::envOr("SECRETS_MAX_AGE_DAYS", "90"));
+}
+
 }  // namespace ExecutionConfig

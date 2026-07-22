@@ -22,6 +22,23 @@ namespace {
 std::atomic<bool> shutdownRequested{false};
 void handleSignal(int) { shutdownRequested = true; }
 
+// Doesn't block startup on an expired credential — a missed rotation
+// reminder is a much smaller problem than an unplanned trading outage, so
+// this only warns, loudly, rather than refusing to run.
+void warnIfSecretExpired(const std::string& encryptedFilePath, const std::string& field, int maxAgeDays) {
+    const int64_t setAtMs = SecretsStore::readFieldSetAtMs(encryptedFilePath, field);
+    if (setAtMs <= 0) return;  // unknown age (e.g. set before this check existed) — nothing to compare against
+
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    const auto ageDays = (nowMs - setAtMs) / (1000LL * 60 * 60 * 24);
+    if (ageDays >= maxAgeDays) {
+        std::cerr << "!!! WARNING: '" << field << "' is " << ageDays << " days old (limit " << maxAgeDays
+                   << ") — rotate it with secrets_cli set !!!\n";
+    }
+}
+
 // Resolves every order left non-terminal by a prior crash against live
 // exchange state, before OrderIntake starts consuming new entries — so a
 // crash between "order placed on the exchange" and "fill recorded" doesn't
@@ -100,6 +117,14 @@ int main() {
         }
         if (connectors.empty()) {
             throw std::runtime_error("No exchange credentials configured at all — nothing to do");
+        }
+
+        for (const char* field :
+             {"binance_api_key", "binance_api_secret", "bybit_api_key", "bybit_api_secret"}) {
+            if (secrets.has(field)) {
+                warnIfSecretExpired(ExecutionConfig::secretsFilePath(), field,
+                                     ExecutionConfig::secretsMaxAgeDays());
+            }
         }
 
         reconcile(repository, connectors);

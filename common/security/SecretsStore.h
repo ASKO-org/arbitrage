@@ -49,6 +49,22 @@ public:
     static void encryptAndWrite(const std::string& masterKeyPath, const std::string& encryptedFilePath,
                                  const std::unordered_map<std::string, std::string>& fields);
 
+    // --- Rotation metadata: separate, UNENCRYPTED file next to the
+    // ciphertext (e.g. secrets/exchange_keys.meta.json for secrets/
+    // exchange_keys.enc.json) holding only {field: {set_at_ms}}. Contains
+    // no secret material, so anything (a web dashboard, execution_service's
+    // startup check) can read it directly without the master key. ---
+
+    static std::string metadataPathFor(const std::string& encryptedFilePath);
+
+    // Updates just this one field's set_at_ms to now, preserving every
+    // other field's existing entry. Creates the metadata file if absent.
+    static void stampMetadata(const std::string& encryptedFilePath, const std::string& field);
+
+    // Returns 0 if the metadata file or that field's entry doesn't exist —
+    // callers should treat 0 as "unknown," not "just set."
+    static int64_t readFieldSetAtMs(const std::string& encryptedFilePath, const std::string& field);
+
 private:
     static std::vector<uint8_t> readMasterKey(const std::string& masterKeyPath);
 

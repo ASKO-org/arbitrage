@@ -38,6 +38,7 @@ void printUsage() {
                << "  secrets_cli init <master-key-path>\n"
                << "  secrets_cli set <master-key-path> <encrypted-file-path> <field>\n"
                << "  secrets_cli get <master-key-path> <encrypted-file-path> <field>\n"
+               << "  secrets_cli check <master-key-path> <encrypted-file-path> <field>\n"
                << "\n"
                << "known fields: binance_api_key, binance_api_secret, bybit_api_key, bybit_api_secret\n";
 }
@@ -89,6 +90,7 @@ int main(int argc, char** argv) {
             fields[field] = promptHidden("Enter value for " + field + ": ");
 
             SecretsStore::encryptAndWrite(masterKeyPath, encryptedFilePath, fields);
+            SecretsStore::stampMetadata(encryptedFilePath, field);
             std::cout << "Updated '" << field << "' in " << encryptedFilePath << "\n";
             return 0;
         }
@@ -101,6 +103,32 @@ int main(int argc, char** argv) {
             SecretsStore store(argv[2], argv[3]);
             std::cout << store.get(argv[4]) << "\n";
             return 0;
+        }
+
+        if (command == "check") {
+            // Confirms a field is present and decrypts successfully —
+            // deliberately never prints the value itself, unlike `get`, so
+            // callers that only want a health check (e.g. a web dashboard)
+            // can't accidentally end up relaying a real secret through
+            // stdout they only meant to check the exit code of.
+            if (argc != 5) {
+                printUsage();
+                return 1;
+            }
+            try {
+                SecretsStore store(argv[2], argv[3]);
+                if (!store.has(argv[4])) {
+                    std::cout << "not set\n";
+                    return 1;
+                }
+                store.get(argv[4]);  // force the lookup path; discard the value
+                std::cout << "ok\n";
+                return 0;
+            } catch (const std::exception& ex) {
+                std::cout << "error\n";
+                std::cerr << "Error: " << ex.what() << "\n";
+                return 1;
+            }
         }
 
         std::cerr << "unknown command: " << command << "\n";

@@ -1,6 +1,7 @@
 #include "security/SecretsStore.h"
 
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -229,4 +230,58 @@ void SecretsStore::encryptAndWrite(const std::string& masterKeyPath, const std::
         throw std::runtime_error("SecretsStore: failed to finalize " + encryptedFilePath + ": " +
                                   std::strerror(errno));
     }
+}
+
+std::string SecretsStore::metadataPathFor(const std::string& encryptedFilePath) {
+    const std::string suffix = ".enc.json";
+    if (encryptedFilePath.size() > suffix.size() &&
+        encryptedFilePath.compare(encryptedFilePath.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        return encryptedFilePath.substr(0, encryptedFilePath.size() - suffix.size()) + ".meta.json";
+    }
+    return encryptedFilePath + ".meta.json";
+}
+
+void SecretsStore::stampMetadata(const std::string& encryptedFilePath, const std::string& field) {
+    const std::string metaPath = metadataPathFor(encryptedFilePath);
+
+    nlohmann::json meta = nlohmann::json::object();
+    if (std::filesystem::exists(metaPath)) {
+        try {
+            meta = nlohmann::json::parse(readFile(metaPath));
+        } catch (const std::exception&) {
+            meta = nlohmann::json::object();  // corrupt/unreadable — start fresh rather than fail the set
+        }
+    }
+
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+    meta[field] = {{"set_at_ms", nowMs}};
+
+    const std::filesystem::path targetPath(metaPath);
+    if (targetPath.has_parent_path()) std::filesystem::create_directories(targetPath.parent_path());
+
+    const std::string tmpPath = metaPath + ".tmp";
+    {
+        std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("SecretsStore: cannot write " + tmpPath);
+        out << meta.dump(2);
+    }
+    if (std::rename(tmpPath.c_str(), metaPath.c_str()) != 0) {
+        throw std::runtime_error("SecretsStore: failed to finalize " + metaPath + ": " + std::strerror(errno));
+    }
+}
+
+int64_t SecretsStore::readFieldSetAtMs(const std::string& encryptedFilePath, const std::string& field) {
+    const std::string metaPath = metadataPathFor(encryptedFilePath);
+    if (!std::filesystem::exists(metaPath)) return 0;
+
+    nlohmann::json meta;
+    try {
+        meta = nlohmann::json::parse(readFile(metaPath));
+    } catch (const std::exception&) {
+        return 0;
+    }
+    if (!meta.contains(field)) return 0;
+    return meta.at(field).value("set_at_ms", int64_t{0});
 }
