@@ -14,6 +14,23 @@ struct redisContext;
 // subscriber restart is harmless (a fresher one follows immediately), so
 // there's no need for the durability/ack/replay machinery OrderIntake uses
 // for order flow.
+//
+// A pub/sub client that falls behind gets disconnected by Redis itself
+// (its client-output-buffer limit), but hiredis may still have a backlog
+// buffered locally from before the drop — so a dead connection doesn't
+// always announce itself as a read error. run() treats three independent
+// signals as equally conclusive proof the connection needs replacing,
+// each catching a case the others can't see:
+//   1. A real read error (redisGetReply fails with something other than
+//      a timeout) — the ordinary, expected case.
+//   2. A message arrives whose own timestamp is already stale — proof
+//      we're draining old backlog, not live data.
+//   3. Total silence for too long — proof the connection is dead even
+//      when there's no backlog left to check the age of (case 2 can't
+//      detect this at all).
+// All three funnel into the same reconnectDueTo() -> reconnectWithRetry()
+// path, which also enforces a cooldown so a recurring condition can't
+// spin faster than ~1 reconnect/sec.
 class QuoteFeedSubscriber {
 public:
     // Throws std::runtime_error if the connection to Redis fails.
@@ -37,6 +54,11 @@ private:
     // Retries connect() once per second until it succeeds or shouldStop()
     // returns true.
     void reconnectWithRetry(const std::function<bool()>& shouldStop);
+
+    // Logs reason (already describing which of the three signals fired
+    // and on which channel) and reconnects. The single funnel point for
+    // all three dead-connection signals described above.
+    void reconnectDueTo(const std::string& reason, const std::function<bool()>& shouldStop);
 
     std::string host_;
     int port_;

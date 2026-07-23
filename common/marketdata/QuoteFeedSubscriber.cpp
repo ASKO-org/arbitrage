@@ -90,6 +90,11 @@ void QuoteFeedSubscriber::reconnectWithRetry(const std::function<bool()>& should
     }
 }
 
+void QuoteFeedSubscriber::reconnectDueTo(const std::string& reason, const std::function<bool()>& shouldStop) {
+    std::cerr << "[QuoteFeedSubscriber] " << reason << " -- forcing a fresh reconnect\n";
+    reconnectWithRetry(shouldStop);
+}
+
 void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
                                const std::function<bool()>& shouldStop) {
     while (!shouldStop()) {
@@ -98,30 +103,27 @@ void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
             if (context_->err == REDIS_ERR_IO && errno == EAGAIN) {
                 // Receive timed out with nothing new — normal, happens every
                 // ~1s. But if this channel has gone suspiciously long
-                // without delivering anything at all, that's the "dead
-                // connection with no backlog left" case the per-message
-                // staleness check below can't see.
+                // without delivering anything at all, that's signal #3
+                // (total silence) — the "dead connection with no backlog
+                // left" case signal #2 (message staleness, below) can't see.
                 const auto silence = std::chrono::steady_clock::now() - lastMessageAt_;
                 if (silence > kNoMessageTimeout) {
                     const auto silenceMs =
                         std::chrono::duration_cast<std::chrono::milliseconds>(silence).count();
-                    std::cerr << "[QuoteFeedSubscriber] no message at all on '" << channel_ << "' for "
-                               << silenceMs << "ms -- connection is almost certainly dead; forcing a "
-                                              "fresh reconnect\n";
-                    reconnectWithRetry(shouldStop);
+                    reconnectDueTo("no message at all on '" + channel_ + "' for " +
+                                       std::to_string(silenceMs) + "ms",
+                                   shouldStop);
                 }
                 continue;  // recheck shouldStop()
             }
 
-            // Anything else means this connection is unusable — e.g. Redis
-            // closed it (a pub/sub client that falls behind gets
+            // Signal #1: a real read error. Most often Redis itself closed
+            // the connection (a pub/sub client that falls behind gets
             // disconnected once it exceeds Redis's client-output-buffer
-            // limit) or a transient network drop. Reconnect and
-            // re-subscribe instead of either busy-spinning on a dead socket
-            // or tearing down the whole process over something recoverable.
-            std::cerr << "[QuoteFeedSubscriber] connection lost on '" << channel_ << "' ("
-                       << context_->errstr << ") -- reconnecting\n";
-            reconnectWithRetry(shouldStop);
+            // limit), sometimes a transient network drop. Either way,
+            // reconnect and re-subscribe instead of either busy-spinning on
+            // a dead socket or tearing down the whole process.
+            reconnectDueTo("connection lost on '" + channel_ + "' (" + context_->errstr + ")", shouldStop);
             continue;
         }
 
@@ -138,21 +140,18 @@ void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
         try {
             const Quote quote = quoteFromJson(nlohmann::json::parse(payload));
 
-            // A quote can only be this old if we're processing a backlog
-            // hiredis already had buffered locally from before the
-            // connection actually died — Redis's own disconnect (above)
-            // doesn't fire until *after* that buffer is exhausted, which
-            // can take a long time (or never happen) if the backlog keeps
-            // being fed faster than it drains. Checking the data's own age
-            // catches this directly instead of waiting for a connection
-            // error that may arrive far too late.
+            // Signal #2: the message's own timestamp is already stale.
+            // Redis's disconnect (signal #1) doesn't fire until *after*
+            // hiredis's local backlog is exhausted, which can take a long
+            // time (or never happen) if the backlog keeps being fed faster
+            // than it drains. Checking the data's own age catches this
+            // directly instead of waiting for a connection error that may
+            // arrive far too late.
             const auto age = std::chrono::system_clock::now() - quote.exchangeTimestamp;
             if (age > kStaleQuoteThreshold) {
                 const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(age).count();
-                std::cerr << "[QuoteFeedSubscriber] quote on '" << channel_ << "' is " << ageMs
-                           << "ms old -- connection is almost certainly stuck on a stale backlog; "
-                              "forcing a fresh reconnect\n";
-                reconnectWithRetry(shouldStop);
+                reconnectDueTo("quote on '" + channel_ + "' is " + std::to_string(ageMs) + "ms old",
+                               shouldStop);
                 continue;
             }
 
