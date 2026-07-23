@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -41,4 +42,10 @@ private:
     int port_;
     std::string channel_;
     std::unique_ptr<redisContext, RedisContextDeleter> context_;
+
+    // Updated every time a genuine message is received (regardless of its
+    // own staleness). Lets run() detect a connection that has gone
+    // completely silent — not even stale backlog left to check the age of
+    // — which the per-message staleness check can't see at all.
+    std::chrono::steady_clock::time_point lastMessageAt_;
 };

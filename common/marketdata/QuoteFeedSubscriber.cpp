@@ -15,6 +15,16 @@ namespace {
 // delay — it can only mean the connection died and we're draining a stale
 // backlog that built up in hiredis's own read buffer before the drop.
 constexpr auto kStaleQuoteThreshold = std::chrono::seconds(15);
+
+// If a channel that's normally active goes this long without delivering
+// *anything* — not even a stale message to check the age of — that's
+// equally proof the connection is dead. This catches the case the
+// per-message staleness check can't see at all: a connection that died
+// with no backlog left to drain, which just times out silently forever
+// otherwise (the original bug, for a case the staleness check doesn't
+// cover). Slightly more generous than kStaleQuoteThreshold to avoid
+// overlapping false-positives right after a fresh reconnect.
+constexpr auto kNoMessageTimeout = std::chrono::seconds(20);
 }  // namespace
 
 void QuoteFeedSubscriber::RedisContextDeleter::operator()(redisContext* context) const {
@@ -50,6 +60,11 @@ void QuoteFeedSubscriber::connect() {
         throw std::runtime_error("QuoteFeedSubscriber: SUBSCRIBE failed: " + std::string(context_->errstr));
     }
     freeReplyObject(reply);
+
+    // Reset the silence clock on every (re)connect so a fresh connection
+    // gets a full kNoMessageTimeout window to receive its first message,
+    // rather than inheriting whatever was left of the previous one.
+    lastMessageAt_ = std::chrono::steady_clock::now();
 }
 
 void QuoteFeedSubscriber::reconnectWithRetry(const std::function<bool()>& shouldStop) {
@@ -81,7 +96,21 @@ void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
         void* replyVoid = nullptr;
         if (redisGetReply(context_.get(), &replyVoid) != REDIS_OK) {
             if (context_->err == REDIS_ERR_IO && errno == EAGAIN) {
-                continue;  // receive timed out with nothing new; recheck shouldStop()
+                // Receive timed out with nothing new — normal, happens every
+                // ~1s. But if this channel has gone suspiciously long
+                // without delivering anything at all, that's the "dead
+                // connection with no backlog left" case the per-message
+                // staleness check below can't see.
+                const auto silence = std::chrono::steady_clock::now() - lastMessageAt_;
+                if (silence > kNoMessageTimeout) {
+                    const auto silenceMs =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(silence).count();
+                    std::cerr << "[QuoteFeedSubscriber] no message at all on '" << channel_ << "' for "
+                               << silenceMs << "ms -- connection is almost certainly dead; forcing a "
+                                              "fresh reconnect\n";
+                    reconnectWithRetry(shouldStop);
+                }
+                continue;  // recheck shouldStop()
             }
 
             // Anything else means this connection is unusable — e.g. Redis
@@ -103,6 +132,8 @@ void QuoteFeedSubscriber::run(const std::function<void(const Quote&)>& handler,
         if (isMessage) payload = reply->element[2]->str ? reply->element[2]->str : "";
         freeReplyObject(reply);
         if (!isMessage) continue;
+
+        lastMessageAt_ = std::chrono::steady_clock::now();
 
         try {
             const Quote quote = quoteFromJson(nlohmann::json::parse(payload));
