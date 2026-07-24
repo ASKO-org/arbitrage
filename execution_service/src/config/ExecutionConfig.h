@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 
 #include "config/Config.h"
@@ -26,12 +27,20 @@ inline double maxAbsPosition() {
     return std::stod(Config::envOr("EXECUTION_MAX_ABS_POSITION", "1000"));
 }
 
-// Defaults to each venue's testnet so a service started without credentials
-// configured can't accidentally reach the live account.
-inline std::string binanceBaseUrl() {
-    return Config::envOr("BINANCE_BASE_URL", "https://testnet.binance.vision");
-}
+// Defaults to Bybit's testnet so a service started without BYBIT_BASE_URL
+// explicitly set can't accidentally reach the live account.
 inline std::string bybitBaseUrl() { return Config::envOr("BYBIT_BASE_URL", "https://api-testnet.bybit.com"); }
+
+// Bitget has no separate testnet REST host the way Bybit does, so there's no
+// safe default to fall back to — requires an explicit value rather than
+// silently defaulting to the live mainnet host.
+inline std::string bitgetBaseUrl() {
+    const std::string url = Config::envOr("BITGET_BASE_URL", "");
+    if (url.empty()) {
+        throw std::runtime_error("BITGET_BASE_URL not set — refusing to guess a default for a live trading host");
+    }
+    return url;
+}
 
 // The actual API keys/secrets are no longer read from plain env vars — see
 // SecretsStore (common/security/SecretsStore.h). These two paths are not

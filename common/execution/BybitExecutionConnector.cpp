@@ -107,6 +107,88 @@ OrderResult BybitExecutionConnector::getOrderStatus(const std::string& orderId, 
     }
 }
 
+std::vector<AssetBalance> BybitExecutionConnector::getBalances() {
+    // UNIFIED is the only account type Bybit's docs list for this endpoint
+    // today — legacy Classic-account types are effectively gone.
+    const std::string queryString = "accountType=UNIFIED";
+    const std::string timestamp = std::to_string(currentTimeMs());
+    const std::string recvWindow = "5000";
+    const std::string signature =
+        HmacSigner::hmacSha256Hex(apiSecret_, timestamp + apiKey_ + recvWindow + queryString);
+
+    const std::vector<std::string> headers = {
+        "X-BAPI-API-KEY: " + apiKey_,
+        "X-BAPI-TIMESTAMP: " + timestamp,
+        "X-BAPI-RECV-WINDOW: " + recvWindow,
+        "X-BAPI-SIGN: " + signature,
+    };
+
+    const std::string responseBody =
+        HttpClient::request("GET", baseUrl_ + "/v5/account/wallet-balance?" + queryString, "", headers);
+    const auto json = nlohmann::json::parse(responseBody);
+    if (json.value("retCode", -1) != 0) {
+        throw std::runtime_error("Bybit wallet-balance error: " + json.value("retMsg", "unknown error"));
+    }
+
+    std::vector<AssetBalance> balances;
+    const auto& list = json.at("result").at("list");
+    if (list.empty()) return balances;
+    for (const auto& coinEntry : list.at(0).at("coin")) {
+        const double walletBalance = std::stod(coinEntry.value("walletBalance", "0"));
+        const double locked = std::stod(coinEntry.value("locked", "0"));
+        // ~0 for a spot-only coin — only nonzero if margin/derivatives are
+        // also using this same coin as collateral.
+        const double positionIM = std::stod(coinEntry.value("totalPositionIM", "0"));
+        const double orderIM = std::stod(coinEntry.value("totalOrderIM", "0"));
+        if (walletBalance == 0.0 && locked == 0.0) continue;
+        balances.push_back(AssetBalance{coinEntry.value("coin", ""), walletBalance - locked - positionIM - orderIM,
+                                         locked});
+    }
+    return balances;
+}
+
+std::vector<Position> BybitExecutionConnector::getPositions() {
+    // linear = USDT-margined perpetuals; settleCoin with no symbol returns
+    // every open position in one call instead of querying symbol by symbol.
+    const std::string queryString = "category=linear&settleCoin=USDT";
+    const std::string timestamp = std::to_string(currentTimeMs());
+    const std::string recvWindow = "5000";
+    const std::string signature =
+        HmacSigner::hmacSha256Hex(apiSecret_, timestamp + apiKey_ + recvWindow + queryString);
+
+    const std::vector<std::string> headers = {
+        "X-BAPI-API-KEY: " + apiKey_,
+        "X-BAPI-TIMESTAMP: " + timestamp,
+        "X-BAPI-RECV-WINDOW: " + recvWindow,
+        "X-BAPI-SIGN: " + signature,
+    };
+
+    const std::string responseBody =
+        HttpClient::request("GET", baseUrl_ + "/v5/position/list?" + queryString, "", headers);
+    const auto json = nlohmann::json::parse(responseBody);
+    if (json.value("retCode", -1) != 0) {
+        throw std::runtime_error("Bybit position-list error: " + json.value("retMsg", "unknown error"));
+    }
+
+    std::vector<Position> positions;
+    for (const auto& entry : json.at("result").at("list")) {
+        // Bybit returns one entry per symbol even when flat (size "0"),
+        // especially under hedge/positionIdx mode.
+        const double size = std::stod(entry.value("size", "0"));
+        if (size == 0.0) continue;
+        positions.push_back(Position{
+            entry.value("symbol", ""),
+            entry.value("side", "") == "Buy" ? "long" : "short",
+            size,
+            std::stod(entry.value("avgPrice", "0")),
+            std::stod(entry.value("markPrice", "0")),
+            std::stod(entry.value("unrealisedPnl", "0")),
+            std::stod(entry.value("leverage", "0")),
+        });
+    }
+    return positions;
+}
+
 void BybitExecutionConnector::cancelOrder(const std::string& orderId, const std::string& symbol) {
     const nlohmann::json body = {
         {"category", "spot"},

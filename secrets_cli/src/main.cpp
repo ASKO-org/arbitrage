@@ -12,8 +12,10 @@ namespace {
 
 // Fields this tool knows how to merge when updating one at a time. Kept as
 // a fixed list (rather than something more generic) since there are
-// currently exactly four exchange credentials in scope.
-const char* kKnownFields[] = {"binance_api_key", "binance_api_secret", "bybit_api_key", "bybit_api_secret"};
+// currently exactly two exchanges in scope — no Binance account exists,
+// so it's not tracked here at all.
+const char* kKnownFields[] = {"bybit_api_key", "bybit_api_secret", "bitget_api_key", "bitget_api_secret",
+                              "bitget_api_passphrase"};
 
 std::string promptHidden(const std::string& prompt) {
     std::cout << prompt;
@@ -40,7 +42,8 @@ void printUsage() {
                << "  secrets_cli get <master-key-path> <encrypted-file-path> <field>\n"
                << "  secrets_cli check <master-key-path> <encrypted-file-path> <field>\n"
                << "\n"
-               << "known fields: binance_api_key, binance_api_secret, bybit_api_key, bybit_api_secret\n";
+               << "known fields: bybit_api_key, bybit_api_secret, bitget_api_key, bitget_api_secret, "
+                  "bitget_api_passphrase\n";
 }
 
 }  // namespace

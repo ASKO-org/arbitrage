@@ -17,8 +17,6 @@
 #include "config/Config.h"
 #include "config/MarketDataFeedConfig.h"
 #include "database/DatabaseRepository.h"
-#include "marketdata/BinanceFutMarketDataConnector.h"
-#include "marketdata/BinanceMarketDataConnector.h"
 #include "marketdata/BingxFutMarketDataConnector.h"
 #include "marketdata/BingxSpotMarketDataConnector.h"
 #include "marketdata/BitgetFutMarketDataConnector.h"
@@ -54,7 +52,7 @@ void handleSignal(int) { shutdownRequested = true; }
 // periodic report below so the numbers aren't mistaken for more than they
 // are until the rest of the connectors get the same treatment.
 const std::unordered_set<std::string> kVenuesWithNativeTimestamp{
-    "BINANCE_Fut", "BYBIT_Spot", "BYBIT_Fut", "OKX_Spot", "OKX_Fut", "GATEIO_Spot", "GATEIO_Fut",
+    "BYBIT_Spot", "BYBIT_Fut", "OKX_Spot", "OKX_Fut", "GATEIO_Spot", "GATEIO_Fut",
 };
 
 using SteadyClock = std::chrono::steady_clock;
@@ -158,7 +156,6 @@ int main() {
         // they're built. Kept as the single source of truth for "which
         // venues exist" — quote_recorder no longer builds this list itself.
         std::vector<std::unique_ptr<IMarketDataConnector>> connectors;
-        connectors.push_back(std::make_unique<BinanceMarketDataConnector>());
         connectors.push_back(std::make_unique<BybitMarketDataConnector>());
         connectors.push_back(std::make_unique<KucoinSpotMarketDataConnector>());
         connectors.push_back(std::make_unique<KucoinFutMarketDataConnector>());
@@ -168,7 +165,6 @@ int main() {
         connectors.push_back(std::make_unique<HtxFutMarketDataConnector>());
         connectors.push_back(std::make_unique<OkxSpotMarketDataConnector>());
         connectors.push_back(std::make_unique<OkxFutMarketDataConnector>());
-        connectors.push_back(std::make_unique<BinanceFutMarketDataConnector>());
         connectors.push_back(std::make_unique<BybitFutMarketDataConnector>());
         connectors.push_back(std::make_unique<KrakenSpotMarketDataConnector>());
         connectors.push_back(std::make_unique<KrakenFutMarketDataConnector>());

@@ -76,6 +76,7 @@ add_library(common STATIC
     common/execution/OrderSubmitter.cpp
     common/execution/BinanceExecutionConnector.cpp
     common/execution/BybitExecutionConnector.cpp
+    common/execution/BitgetExecutionConnector.cpp
     common/security/SecretsStore.cpp
 )
 target_include_directories(common PUBLIC common ${HIREDIS_INCLUDE_DIRS})
@@ -183,6 +184,29 @@ add_executable(execution_cli
 )
 target_include_directories(execution_cli PRIVATE execution_service/src)
 target_link_libraries(execution_cli PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# balance_cli — командная утилита: печатает текущие балансы spot-аккаунта
+# по всем биржам, для которых настроены секреты (используется execution_viewer
+# через subprocess, тот же паттерн, что secrets_viewer -> secrets_cli).
+add_executable(balance_cli
+    balance_cli/src/main.cpp
+)
+target_include_directories(balance_cli PRIVATE execution_service/src)
+target_link_libraries(balance_cli PRIVATE
+    common
+    nlohmann_json::nlohmann_json
+)
+
+# position_cli — командная утилита: печатает открытые позиции по фьючерсам
+# по всем биржам, для которых настроены секреты (тот же паттерн, что balance_cli).
+add_executable(position_cli
+    position_cli/src/main.cpp
+)
+target_include_directories(position_cli PRIVATE execution_service/src)
+target_link_libraries(position_cli PRIVATE
     common
     nlohmann_json::nlohmann_json
 )

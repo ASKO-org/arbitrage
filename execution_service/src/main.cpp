@@ -12,7 +12,7 @@
 #include "core/OrderRouter.h"
 #include "core/ReportPublisher.h"
 #include "database/DatabaseRepository.h"
-#include "execution/BinanceExecutionConnector.h"
+#include "execution/BitgetExecutionConnector.h"
 #include "execution/BybitExecutionConnector.h"
 #include "execution/IExecutionConnector.h"
 #include "models/Fill.h"
@@ -98,33 +98,27 @@ int main() {
 
         SecretsStore secrets(ExecutionConfig::secretsMasterKeyPath(), ExecutionConfig::secretsFilePath());
 
-        // Only wire up venues whose credentials are actually configured —
-        // lets this run with e.g. Bybit-only while Binance keys aren't set
-        // up yet, rather than requiring every known venue up front.
+        // Each venue is wired up independently, skipped if its credentials
+        // aren't configured — fails loudly only if that leaves nothing to do
+        // at all, rather than requiring every known venue to be present.
         std::vector<std::unique_ptr<IExecutionConnector>> connectors;
-        if (secrets.has("binance_api_key") && secrets.has("binance_api_secret")) {
-            connectors.push_back(std::make_unique<BinanceExecutionConnector>(
-                secrets.get("binance_api_key"), secrets.get("binance_api_secret"),
-                ExecutionConfig::binanceBaseUrl()));
-        } else {
-            std::cout << "Binance credentials not configured — skipping Binance connector\n";
-        }
         if (secrets.has("bybit_api_key") && secrets.has("bybit_api_secret")) {
             connectors.push_back(std::make_unique<BybitExecutionConnector>(
                 secrets.get("bybit_api_key"), secrets.get("bybit_api_secret"), ExecutionConfig::bybitBaseUrl()));
-        } else {
-            std::cout << "Bybit credentials not configured — skipping Bybit connector\n";
+        }
+        if (secrets.has("bitget_api_key") && secrets.has("bitget_api_secret") &&
+            secrets.has("bitget_api_passphrase")) {
+            connectors.push_back(std::make_unique<BitgetExecutionConnector>(
+                secrets.get("bitget_api_key"), secrets.get("bitget_api_secret"),
+                secrets.get("bitget_api_passphrase"), ExecutionConfig::bitgetBaseUrl()));
         }
         if (connectors.empty()) {
-            throw std::runtime_error("No exchange credentials configured at all — nothing to do");
+            throw std::runtime_error("No exchange credentials configured — nothing to do");
         }
 
         for (const char* field :
-             {"binance_api_key", "binance_api_secret", "bybit_api_key", "bybit_api_secret"}) {
-            if (secrets.has(field)) {
-                warnIfSecretExpired(ExecutionConfig::secretsFilePath(), field,
-                                     ExecutionConfig::secretsMaxAgeDays());
-            }
+             {"bybit_api_key", "bybit_api_secret", "bitget_api_key", "bitget_api_secret", "bitget_api_passphrase"}) {
+            warnIfSecretExpired(ExecutionConfig::secretsFilePath(), field, ExecutionConfig::secretsMaxAgeDays());
         }
 
         reconcile(repository, connectors);

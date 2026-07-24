@@ -15,6 +15,8 @@ public:
     OrderResult placeOrder(const Order& order) override;
     void cancelOrder(const std::string& orderId, const std::string& symbol) override;
     OrderResult getOrderStatus(const std::string& orderId, const std::string& symbol) override;
+    std::vector<AssetBalance> getBalances() override;
+    std::vector<Position> getPositions() override;
 
 private:
     std::string apiKey_;
