@@ -57,6 +57,22 @@ const std::unordered_set<std::string> kVenuesWithNativeTimestamp{
     "BINANCE_Fut", "BYBIT_Spot", "BYBIT_Fut", "OKX_Spot", "OKX_Fut", "GATEIO_Spot", "GATEIO_Fut",
 };
 
+using SteadyClock = std::chrono::steady_clock;
+
+// If a venue goes this long without delivering anything at all, its
+// WebSocket connection is almost certainly dead without ever having fired
+// its own onClose/onError callback — the exact same silent-death pattern
+// fixed in QuoteFeedSubscriber, just one layer up (the exchange connector
+// itself, not the Redis subscriber reading from what it publishes). A
+// dead connector here means quote_recorder's per-venue subscriber keeps
+// correctly reconnecting to a publisher that has nothing to send it,
+// which can never resolve on its own — this is what actually needs to
+// notice and recover. Forces a full stop()+start() cycle (confirmed safe
+// to repeat: subscribe() only stores symbol data, start() is what opens
+// the connection and re-subscribes from that stored data) rather than
+// waiting for the exchange or IXWebSocket to notice on their own.
+constexpr auto kConnectorSilenceTimeout = std::chrono::seconds(30);
+
 // Accumulates exchange-to-publish latency (ms) for one venue between
 // periodic reports. Lock-free: recorded from whichever connector IO thread
 // receives a quote, read/reset from the single reporting thread.
@@ -232,15 +248,26 @@ int main() {
         std::vector<std::atomic<long>> quoteCounts(connectors.size());
         std::vector<LatencyAccumulator> latencies(connectors.size());
 
+        // Updated on every message received (regardless of content), read
+        // by the silence watchdog in the main loop below. reconnecting[i]
+        // guards against spawning overlapping reconnect attempts for the
+        // same connector while one is still in progress.
+        std::vector<std::atomic<SteadyClock::rep>> lastMessageAt(connectors.size());
+        std::vector<std::atomic<bool>> reconnecting(connectors.size());
+        for (auto& t : lastMessageAt) t.store(SteadyClock::now().time_since_epoch().count());
+
         for (size_t i = 0; i < connectors.size(); ++i) {
             connectors[i]->subscribe(symbols);
             QuoteFeedPublisher* publisher = publishers[i].get();
-            connectors[i]->setOnQuote([publisher, &quoteCounts, &latencies, i](const Quote& quote) {
+            connectors[i]->setOnQuote([publisher, &quoteCounts, &latencies, &lastMessageAt, i](
+                                           const Quote& quote) {
                 const auto latencyMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::system_clock::now() - quote.exchangeTimestamp)
                                            .count();
                 latencies[i].record(latencyMs);
                 ++quoteCounts[i];
+                lastMessageAt[i].store(SteadyClock::now().time_since_epoch().count(),
+                                        std::memory_order_relaxed);
                 publisher->publish(quote);
             });
         }
@@ -251,6 +278,29 @@ int main() {
         const auto reportInterval = MarketDataFeedConfig::statsReportInterval();
         while (!shutdownRequested) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+            for (size_t i = 0; i < connectors.size(); ++i) {
+                const auto lastMs = lastMessageAt[i].load(std::memory_order_relaxed);
+                const auto silence =
+                    SteadyClock::now() - SteadyClock::time_point(SteadyClock::duration(lastMs));
+                if (silence <= kConnectorSilenceTimeout) continue;
+                if (reconnecting[i].exchange(true)) continue;  // already reconnecting this one
+
+                IMarketDataConnector* connector = connectors[i].get();
+                const std::string venue = connector->exchangeName();
+                const auto silenceMs = std::chrono::duration_cast<std::chrono::milliseconds>(silence).count();
+                std::cerr << "[" << venue << "] no data at all for " << silenceMs
+                           << "ms -- connection is almost certainly dead; forcing stop()+start()\n";
+                std::thread([connector, &lastMessageAt, &reconnecting, i, venue] {
+                    connector->stop();
+                    connector->start();
+                    lastMessageAt[i].store(SteadyClock::now().time_since_epoch().count(),
+                                            std::memory_order_relaxed);
+                    reconnecting[i].store(false);
+                    std::cerr << "[" << venue << "] restarted after silence\n";
+                }).detach();
+            }
+
             if (std::chrono::steady_clock::now() - lastReport > reportInterval) {
                 for (size_t i = 0; i < connectors.size(); ++i) {
                     const std::string& venue = connectors[i]->exchangeName();
