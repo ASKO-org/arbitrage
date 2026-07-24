@@ -36,6 +36,11 @@ OrderResult BybitExecutionConnector::placeOrder(const Order& order) {
     if (order.type == OrderType::Limit) {
         body["price"] = std::to_string(order.price);
         body["timeInForce"] = "GTC";
+    } else {
+        // Market orders default to spending-by-quote-value for buys (sells
+        // already default to base-coin) — force base-coin sizing explicitly
+        // so qty means the same thing regardless of side.
+        body["marketUnit"] = "baseCoin";
     }
     const std::string bodyStr = body.dump();
 

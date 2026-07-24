@@ -24,6 +24,24 @@ const nlohmann::json& firstOrderInfo(const nlohmann::json& data) {
     return data.empty() ? empty : data.at(0);
 }
 
+// Bitget's plain spot place-order endpoint has no base/quote-unit override
+// (unlike its margin endpoints, or Bybit's marketUnit) — "size" on a market
+// BUY always means quote-currency amount to spend, so a market buy for a
+// specific base-asset qty has to be converted using the current price, same
+// approach ccxt's bitget adapter uses. Public endpoint, no auth needed.
+double fetchAskPrice(const std::string& baseUrl, const std::string& symbol) {
+    const std::string responseBody = HttpClient::get(baseUrl + "/api/v2/spot/market/tickers?symbol=" + symbol);
+    const auto json = nlohmann::json::parse(responseBody);
+    if (json.value("code", "") != "00000") {
+        throw std::runtime_error("Bitget ticker error: " + json.value("msg", "unknown error"));
+    }
+    const auto& data = json.at("data");
+    if (data.empty()) {
+        throw std::runtime_error("Bitget ticker: no data for symbol " + symbol);
+    }
+    return std::stod(data.at(0).value("askPr", "0"));
+}
+
 }  // namespace
 
 BitgetExecutionConnector::BitgetExecutionConnector(std::string apiKey, std::string apiSecret,
@@ -36,13 +54,24 @@ BitgetExecutionConnector::BitgetExecutionConnector(std::string apiKey, std::stri
 std::string BitgetExecutionConnector::exchangeName() const { return "BITGET_Spot"; }
 
 OrderResult BitgetExecutionConnector::placeOrder(const Order& order) {
+    std::string sizeStr = std::to_string(order.qty);
+    if (order.type == OrderType::Market && order.side == OrderSide::Buy) {
+        try {
+            const double askPrice = fetchAskPrice(baseUrl_, order.symbol);
+            sizeStr = std::to_string(order.qty * askPrice);
+        } catch (const std::exception& ex) {
+            return OrderResult{false, 0.0, 0.0, false,
+                                std::string("failed to price market buy for base-qty sizing: ") + ex.what()};
+        }
+    }
+
     // clientOid carries order.orderId through as-is, so a retried submission
     // is deduped by Bitget itself rather than creating a second order.
     nlohmann::json body = {
         {"symbol", order.symbol},
         {"side", order.side == OrderSide::Buy ? "buy" : "sell"},
         {"orderType", order.type == OrderType::Market ? "market" : "limit"},
-        {"size", std::to_string(order.qty)},
+        {"size", sizeStr},
         {"clientOid", order.orderId},
     };
     if (order.type == OrderType::Limit) {
